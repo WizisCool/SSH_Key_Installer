@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #=============================================================
-# https://github.com/wiziscool/SSH_Key_Installer
+# https://github.com/P3TERX/SSH_Key_Installer
 # 描述: 通过GitHub、URL或本地文件安装SSH密钥
-# 版本: 3.0 (改进版)
-# 作者: WizisCool 
-# 博客: https://dooo.ng
+# 版本: 2.8
+# 作者: P3TERX (改进版)
+# 博客: https://p3terx.com
 #=============================================================
 
 VERSION=2.8
@@ -76,15 +76,9 @@ get_loacl_key() {
 install_key() {
     [ "${PUB_KEY}" == '' ] && echo "${ERROR} SSH密钥不存在。" && exit 1
     if [ ! -f "${HOME}/.ssh/authorized_keys" ]; then
-        echo -e "${INFO} '${HOME}/.ssh/authorized_keys' 文件不存在..."
-        echo -e "${INFO} 正在创建 ${HOME}/.ssh/authorized_keys..."
+        echo -e "${INFO} 创建 ${HOME}/.ssh/authorized_keys..."
         mkdir -p ${HOME}/.ssh/
         touch ${HOME}/.ssh/authorized_keys
-        if [ ! -f "${HOME}/.ssh/authorized_keys" ]; then
-            echo -e "${ERROR} 创建SSH密钥文件失败。"
-        else
-            echo -e "${INFO} 密钥文件创建成功，继续进行..."
-        fi
     fi
     if [ "${OVERWRITE}" == 1 ]; then
         echo -e "${INFO} 正在覆盖SSH密钥..."
@@ -102,150 +96,130 @@ install_key() {
     }
 }
 
-check_and_enable_pubkey_auth() {
-    echo -e "${INFO} 正在检查密钥认证状态..."
+enable_pubkey_auth() {
+    echo -e "${INFO} 正在确保密钥认证已启用..."
     
     if [ $(uname -o) == Android ]; then
         SSHD_CONFIG="$PREFIX/etc/ssh/sshd_config"
+        SED_CMD="sed -i"
     else
         SSHD_CONFIG="/etc/ssh/sshd_config"
+        SED_CMD="$SUDO sed -i"
     fi
     
     # 备份配置文件
     if [ $(uname -o) == Android ]; then
-        cp $SSHD_CONFIG ${SSHD_CONFIG}.bak.$(date +%Y%m%d%H%M%S)
+        cp $SSHD_CONFIG ${SSHD_CONFIG}.bak
     else
-        $SUDO cp $SSHD_CONFIG ${SSHD_CONFIG}.bak.$(date +%Y%m%d%H%M%S)
+        $SUDO cp $SSHD_CONFIG ${SSHD_CONFIG}.bak
     fi
-    echo -e "${INFO} 配置文件已备份"
     
-    # 检查并启用密钥认证
-    if grep -q "^PubkeyAuthentication no" $SSHD_CONFIG 2>/dev/null || grep -q "^#PubkeyAuthentication" $SSHD_CONFIG 2>/dev/null; then
-        echo -e "${WARNING} 密钥认证未启用，正在启用..."
-        if [ $(uname -o) == Android ]; then
-            sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/' $SSHD_CONFIG
-        else
-            $SUDO sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/' $SSHD_CONFIG
-        fi
-        echo -e "${INFO} 密钥认证已启用"
-        RESTART_SSHD=1
-    elif grep -q "^PubkeyAuthentication yes" $SSHD_CONFIG 2>/dev/null; then
-        echo -e "${INFO} 密钥认证已经启用"
+    # 处理PubkeyAuthentication - 使用更精确的sed命令
+    if grep -q "^PubkeyAuthentication" $SSHD_CONFIG 2>/dev/null; then
+        # 如果存在未注释的行，直接修改为yes
+        $SED_CMD 's/^PubkeyAuthentication.*/PubkeyAuthentication yes/' $SSHD_CONFIG
+    elif grep -q "^#PubkeyAuthentication" $SSHD_CONFIG 2>/dev/null; then
+        # 如果存在注释的行，取消注释并设为yes
+        $SED_CMD 's/^#PubkeyAuthentication.*/PubkeyAuthentication yes/' $SSHD_CONFIG
     else
-        # 如果没有找到相关配置，添加配置
-        echo -e "${WARNING} 未找到密钥认证配置，正在添加..."
+        # 如果完全不存在，添加到文件末尾
         if [ $(uname -o) == Android ]; then
             echo "PubkeyAuthentication yes" >> $SSHD_CONFIG
         else
             echo "PubkeyAuthentication yes" | $SUDO tee -a $SSHD_CONFIG > /dev/null
         fi
-        echo -e "${INFO} 密钥认证配置已添加"
-        RESTART_SSHD=1
     fi
     
-    # 确保AuthorizedKeysFile配置正确
+    # 确保AuthorizedKeysFile配置存在
     if ! grep -q "^AuthorizedKeysFile" $SSHD_CONFIG 2>/dev/null; then
-        echo -e "${INFO} 添加AuthorizedKeysFile配置..."
         if [ $(uname -o) == Android ]; then
             echo "AuthorizedKeysFile .ssh/authorized_keys" >> $SSHD_CONFIG
         else
             echo "AuthorizedKeysFile .ssh/authorized_keys" | $SUDO tee -a $SSHD_CONFIG > /dev/null
         fi
     fi
+    
+    echo -e "${INFO} 密钥认证配置完成"
+    RESTART_SSHD=1
 }
 
-test_ssh_connection() {
-    echo -e "${INFO} 正在测试SSH密钥连接..."
-    
-    # 获取当前SSH端口
-    if [ $(uname -o) == Android ]; then
-        SSHD_CONFIG="$PREFIX/etc/ssh/sshd_config"
-    else
-        SSHD_CONFIG="/etc/ssh/sshd_config"
-    fi
-    
-    CURRENT_PORT=$(grep "^Port " $SSHD_CONFIG 2>/dev/null | awk '{print $2}')
-    [ -z "$CURRENT_PORT" ] && CURRENT_PORT=22
-    
-    # 测试配置文件语法
+test_config() {
+    # 仅在非Android系统上测试配置
     if [ $(uname -o) != Android ]; then
-        echo -e "${INFO} 检查SSH配置文件语法..."
-        $SUDO sshd -t -f $SSHD_CONFIG
+        if [ $(uname -o) == Android ]; then
+            SSHD_CONFIG="$PREFIX/etc/ssh/sshd_config"
+        else
+            SSHD_CONFIG="/etc/ssh/sshd_config"
+        fi
+        
+        $SUDO sshd -t -f $SSHD_CONFIG 2>/dev/null
         if [ $? -ne 0 ]; then
-            echo -e "${ERROR} SSH配置文件存在语法错误！"
-            echo -e "${WARNING} 正在恢复备份配置..."
-            $SUDO cp ${SSHD_CONFIG}.bak.$(ls -t ${SSHD_CONFIG}.bak.* | head -1 | cut -d. -f4) $SSHD_CONFIG
+            echo -e "${ERROR} SSH配置文件有错误，正在恢复..."
+            $SUDO cp ${SSHD_CONFIG}.bak $SSHD_CONFIG
             exit 1
         fi
-        echo -e "${INFO} SSH配置文件语法检查通过"
-    fi
-    
-    echo -e "${INFO} SSH密钥配置完成"
-    echo -e "${WARNING} 请确保在重启SSHD服务前，您能够使用密钥连接到服务器"
-    echo -e "${INFO} 当前SSH端口: ${CURRENT_PORT}"
-    
-    if [ "$DISABLE_PASSWORD" != 1 ]; then
-        echo -e "${WARNING} 建议先测试密钥连接是否正常，确认后再禁用密码登录"
     fi
 }
 
 change_port() {
     echo -e "${INFO} 正在将SSH端口更改为 ${SSH_PORT} ..."
     if [ $(uname -o) == Android ]; then
-        [[ -z $(grep "Port " "$PREFIX/etc/ssh/sshd_config") ]] &&
-            echo -e "Port ${SSH_PORT}" >>$PREFIX/etc/ssh/sshd_config ||
-            sed -i "s@.*\(Port \).*@\1${SSH_PORT}@" $PREFIX/etc/ssh/sshd_config
-        [[ $(grep "Port " "$PREFIX/etc/ssh/sshd_config") ]] && {
-            echo -e "${INFO} SSH端口更改成功！"
-            RESTART_SSHD=2
-        } || {
-            RESTART_SSHD=0
-            echo -e "${ERROR} SSH端口更改失败！"
-            exit 1
-        }
+        if grep -q "^Port " "$PREFIX/etc/ssh/sshd_config"; then
+            sed -i "s/^Port .*/Port ${SSH_PORT}/" $PREFIX/etc/ssh/sshd_config
+        elif grep -q "^#Port " "$PREFIX/etc/ssh/sshd_config"; then
+            sed -i "s/^#Port .*/Port ${SSH_PORT}/" $PREFIX/etc/ssh/sshd_config
+        else
+            echo "Port ${SSH_PORT}" >> $PREFIX/etc/ssh/sshd_config
+        fi
+        echo -e "${INFO} SSH端口更改成功！"
+        RESTART_SSHD=2
     else
-        $SUDO sed -i "s@.*\(Port \).*@\1${SSH_PORT}@" /etc/ssh/sshd_config && {
-            echo -e "${INFO} SSH端口更改成功！"
-            RESTART_SSHD=1
-        } || {
-            RESTART_SSHD=0
-            echo -e "${ERROR} SSH端口更改失败！"
-            exit 1
-        }
+        if grep -q "^Port " /etc/ssh/sshd_config; then
+            $SUDO sed -i "s/^Port .*/Port ${SSH_PORT}/" /etc/ssh/sshd_config
+        elif grep -q "^#Port " /etc/ssh/sshd_config; then
+            $SUDO sed -i "s/^#Port .*/Port ${SSH_PORT}/" /etc/ssh/sshd_config
+        else
+            echo "Port ${SSH_PORT}" | $SUDO tee -a /etc/ssh/sshd_config > /dev/null
+        fi
+        echo -e "${INFO} SSH端口更改成功！"
+        RESTART_SSHD=1
     fi
 }
 
 disable_password() {
-    DISABLE_PASSWORD=1
-    echo -e "${WARNING} 准备禁用密码登录..."
-    echo -e "${INFO} 请先确认您已经能够使用密钥成功连接"
-    read -p "您确认已经测试过密钥连接并且能够正常登录吗？(y/n): " -n 1 -r
+    echo -e "${WARNING} 禁用密码登录前，请确保您能使用密钥登录！"
+    echo -e "${INFO} 建议先在新窗口测试密钥登录是否正常"
+    read -p "继续禁用密码登录吗？(y/n): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${WARNING} 已取消禁用密码登录，请先测试密钥连接"
+        echo -e "${INFO} 已取消"
         return
     fi
     
     if [ $(uname -o) == Android ]; then
-        sed -i "s@.*\(PasswordAuthentication \).*@\1no@" $PREFIX/etc/ssh/sshd_config && {
-            RESTART_SSHD=2
-            echo -e "${INFO} 已禁用SSH密码登录。"
-        } || {
-            RESTART_SSHD=0
-            echo -e "${ERROR} 禁用密码登录失败！"
-            exit 1
-        }
+        if grep -q "^PasswordAuthentication" $PREFIX/etc/ssh/sshd_config; then
+            sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' $PREFIX/etc/ssh/sshd_config
+        elif grep -q "^#PasswordAuthentication" $PREFIX/etc/ssh/sshd_config; then
+            sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' $PREFIX/etc/ssh/sshd_config
+        else
+            echo "PasswordAuthentication no" >> $PREFIX/etc/ssh/sshd_config
+        fi
+        RESTART_SSHD=2
     else
-        $SUDO sed -i "s@.*\(PasswordAuthentication \).*@\1no@" /etc/ssh/sshd_config && {
-            RESTART_SSHD=1
-            echo -e "${INFO} 已禁用SSH密码登录。"
-        } || {
-            RESTART_SSHD=0
-            echo -e "${ERROR} 禁用密码登录失败！"
-            exit 1
-        }
+        if grep -q "^PasswordAuthentication" /etc/ssh/sshd_config; then
+            $SUDO sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+        elif grep -q "^#PasswordAuthentication" /etc/ssh/sshd_config; then
+            $SUDO sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+        else
+            echo "PasswordAuthentication no" | $SUDO tee -a /etc/ssh/sshd_config > /dev/null
+        fi
+        RESTART_SSHD=1
     fi
+    echo -e "${INFO} 已禁用SSH密码登录"
 }
+
+# 主程序逻辑
+KEY_INSTALLED=0
 
 while getopts "og:u:f:p:d" OPT; do
     case $OPT in
@@ -256,22 +230,19 @@ while getopts "og:u:f:p:d" OPT; do
         KEY_ID=$OPTARG
         get_github_key
         install_key
-        check_and_enable_pubkey_auth
-        test_ssh_connection
+        KEY_INSTALLED=1
         ;;
     u)
         KEY_URL=$OPTARG
         get_url_key
         install_key
-        check_and_enable_pubkey_auth
-        test_ssh_connection
+        KEY_INSTALLED=1
         ;;
     f)
         KEY_PATH=$OPTARG
         get_loacl_key
         install_key
-        check_and_enable_pubkey_auth
-        test_ssh_connection
+        KEY_INSTALLED=1
         ;;
     p)
         SSH_PORT=$OPTARG
@@ -295,21 +266,19 @@ while getopts "og:u:f:p:d" OPT; do
     esac
 done
 
-if [ "$RESTART_SSHD" = 1 ]; then
-    echo -e "${INFO} 正在重启sshd服务..."
-    echo -e "${WARNING} 请确保您有其他方式访问服务器，以防连接失败"
-    read -p "您确认要重启SSH服务吗？(y/n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        $SUDO systemctl restart sshd && echo -e "${INFO} 完成。"
-    else
-        echo -e "${WARNING} 已取消重启SSH服务"
-        echo -e "${INFO} 配置已保存，但需要手动重启SSH服务才能生效"
-        echo -e "${INFO} 使用命令: sudo systemctl restart sshd"
-    fi
-elif [ "$RESTART_SSHD" = 2 ]; then
-    echo -e "${INFO} 请重启sshd服务或Termux应用以使更改生效。"
+# 如果安装了密钥，自动启用密钥认证
+if [ "$KEY_INSTALLED" = 1 ]; then
+    enable_pubkey_auth
+    test_config
 fi
 
-echo -e "\n${INFO} 操作完成！"
-echo -e "${INFO} 请保持当前SSH连接，并在新窗口中测试密钥登录是否正常"
+# 处理重启
+if [ "$RESTART_SSHD" = 1 ]; then
+    echo -e "${WARNING} 即将重启SSH服务，请确保您有备用连接方式"
+    echo -e "${INFO} 建议先在新窗口测试连接"
+    $SUDO systemctl restart sshd && echo -e "${INFO} SSH服务已重启"
+elif [ "$RESTART_SSHD" = 2 ]; then
+    echo -e "${INFO} 请重启sshd服务或Termux应用以使更改生效"
+fi
+
+echo -e "${INFO} 操作完成！"

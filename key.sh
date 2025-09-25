@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #=============================================================
-# https://github.com/P3TERX/SSH_Key_Installer
+# https://github.com/WizisCool/SSH_Key_Installer
 # 描述: 通过GitHub、URL或本地文件安装SSH密钥
-# 版本: 2.8
-# 作者: P3TERX (改进版)
-# 博客: https://p3terx.com
+# 版本: 3.0 修复增强版
+# 作者: WizisCool
+# 博客: https://dooo.ng
 #=============================================================
 
 VERSION=2.8
@@ -276,7 +276,26 @@ fi
 if [ "$RESTART_SSHD" = 1 ]; then
     echo -e "${WARNING} 即将重启SSH服务，请确保您有备用连接方式"
     echo -e "${INFO} 建议先在新窗口测试连接"
-    $SUDO systemctl restart sshd && echo -e "${INFO} SSH服务已重启"
+    
+    # 检测SSH服务名称
+    if systemctl list-units --full -all | grep -q "ssh.service"; then
+        SSH_SERVICE="ssh"
+    elif systemctl list-units --full -all | grep -q "sshd.service"; then
+        SSH_SERVICE="sshd"
+    else
+        # 尝试查找其他可能的SSH服务名
+        SSH_SERVICE=$(systemctl list-units --full -all | grep -E "(ssh|sshd)" | grep ".service" | head -1 | awk '{print $1}' | sed 's/.service//')
+    fi
+    
+    if [ -n "$SSH_SERVICE" ]; then
+        $SUDO systemctl restart ${SSH_SERVICE} && echo -e "${INFO} SSH服务已重启"
+    else
+        echo -e "${WARNING} 无法自动检测SSH服务名称"
+        echo -e "${INFO} 请手动重启SSH服务："
+        echo -e "  ${INFO} 尝试: sudo systemctl restart ssh"
+        echo -e "  ${INFO} 或者: sudo systemctl restart sshd"
+        echo -e "  ${INFO} 或者: sudo service ssh restart"
+    fi
 elif [ "$RESTART_SSHD" = 2 ]; then
     echo -e "${INFO} 请重启sshd服务或Termux应用以使更改生效"
 fi
